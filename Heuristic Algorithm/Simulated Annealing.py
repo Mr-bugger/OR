@@ -36,14 +36,14 @@ class SimulatedAnnealing:
         # 支持传入字典参数，也可以传入值参数修改默认的字典参数
         default_params = {
             "initial_solution": None,
-            'sol_cnt': 10,
             "objective_function": None,
             'constraint': None,
             'integer': 0,
             'opt_type': 'min',
             "temperature": 1000,
+            'temperature_end': 10,
             'cooling_rate': 0.99,
-            'num_iterations': 1000,
+            'num_iterations': 100,
             'current_solution': None,
             'best_solution': None,
             'best_fitness': None,
@@ -103,19 +103,19 @@ class SimulatedAnnealing:
                 setattr(self, 'best_fitness', kwargs["objective_function"](kwargs['initial_solution']))
 
 
-
-
     def initial_sol(self):
         """
         初始化候选解集
         :return: initial_solutions
         """
-        sol_cnt = self.sol_cnt
+        sol_cnt = self.num_iterations
         check_num = self.check_num # 直接共用一个参数
         candidate_sol_cnt = sol_cnt * 3
 
         candidate_sol = []
         while len(candidate_sol) <= candidate_sol_cnt:
+            pass
+
 
 
 
@@ -217,44 +217,58 @@ class SimulatedAnnealing:
         else:
             return self.prob(new_fitness, current_fitness)
 
-    def best(self):  # 获取最优目标函数值
+    def best(self):
+        """
+        获得当前候选解集中最优解的函数值以及最优解
+        :return:
+        """
         f_list = []  # f_list数组保存每次迭代之后的值
-        for i in range(self.iter):
-            f = self.func(self.x[i], self.y[i])
+        for i in range(self.current_solution):
+            f = self.objective_function(i)
             f_list.append(f)
+
         f_best = min(f_list)
-
         idx = f_list.index(f_best)
-        return f_best, idx  # f_best,idx分别为在该温度下，迭代L次之后目标函数的最优解和最优解的下标
+        return f_best, self.current_solution[idx]  # f_best,idx分别为在该温度下的函数最优值以及对应的变量的取值
 
-    def run(self, acceptance_probability_func=None):
-        if acceptance_probability_func is None:
-            acceptance_probability_func = self.acceptance_probability
+    def solve(self):
+        """
+        模拟退火主函数入口
+        :return:
+        """
+        result = []
+        acceptance_probability_func = self.acceptance_probability
+        count = 0
+        # 外循环迭代，当前温度小于终止温度的阈值
+        while self.temperature > self.temperature_end:
 
-        for i in range(self.num_iterations):
-            new_solution = self.neighbor_solution(self.current_solution)
-            new_fitness = self.objective_function(new_solution)
-            current_fitness = self.objective_function(self.current_solution)
+            # 内循环迭代100次
+            for i in range(self.num_iterations):
+                f = self.objective_function(self.current_solution[i])  # f为迭代一次后的值
+                new_sol = self.neighbor_solution(self.current_solution[i])  # 产生新解
 
-            ap = acceptance_probability_func(new_fitness, current_fitness, self.temperature)
-            if random.random() < ap:
-                self.current_solution = new_solution
-                if new_fitness < self.best_fitness:
-                    self.best_solution = new_solution
-                    self.best_fitness = new_fitness
+                f_new = self.objective_function(new_sol)  # 产生新值
 
-            self.temperature *= self.cooling_rate
+                if random.random() <= acceptance_probability_func(f_new, f):
+                    self.current_solution[i] = new_sol
 
-        return self.best_solution, self.best_fitness
+            # 迭代L次记录在该温度下最优解
+            best_fitness, best_sol = self.best()
+            result.append(best_fitness)
 
+            print(f'当前优化轮数：{count+1}，当前温度值：{self.temperature}, 当前迭代最优解：{best_sol}，最优函数值：{best_fitness}')
+            # 温度按照一定的比例下降（冷却）
+            self.temperature = self.temperature * self.cooling_rate
+            count += 1
 
-def function(x):
-    return x
+            # 得到最优解
+        best_fitness, best_sol = self.best()
+        return best_fitness, best_sol
 
 
 if __name__ == '__main__':
 
-    a = SimulatedAnnealing(initial_solution=2, objective_function=function)
+    a = SimulatedAnnealing(initial_solution=2)
     print(a.best_fitness)
     print(a.current_solution)
 
