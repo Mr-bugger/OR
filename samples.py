@@ -71,7 +71,7 @@ class Constraints:
     """约束条件集合"""
 
     @staticmethod
-    def box_constraint(x: Union[float, List[float]], lower: float, upper: float) -> bool:
+    def box_constraint(x: Union[float, List[float]], lower=0, upper=9999) -> bool:
         """框约束"""
         if isinstance(x, (int, float)):
             return lower <= x <= upper
