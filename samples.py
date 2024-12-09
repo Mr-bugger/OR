@@ -7,6 +7,18 @@ class ObjectiveFunctions:
     """目标函数集合"""
 
     @staticmethod
+    def knapsack_objective(quantities, values):
+        """
+        背包问题的目标函数，计算选定物品的总价值。
+
+        :param values: 物品的价值列表
+        :param quantities: 每个物品的数量列表
+        :return: 选定物品的总价值
+        """
+        total_value = sum(value * quantity for value, quantity in zip(values, quantities))
+        return total_value
+
+    @staticmethod
     def sphere_function(x: Union[float, List[float]]) -> float:
         """球面函数 - 连续可导"""
         if isinstance(x, (int, float)):
@@ -69,6 +81,30 @@ class ObjectiveFunctions:
 
 class Constraints:
     """约束条件集合"""
+
+    @staticmethod
+    def knapsack_constraint(quantities: List[int], weights: List[float], max_num: List[int], max_weight:float):
+        """
+        背包问题的约束条件，检查选定物品的总重量是否超过最大容量。
+
+        :param weights: 物品的重量列表
+        :param selected_items: 选定物品的索引列表
+        :param max_weight: 背包的最大容量
+        :return: 如果总重量不超过最大容量，返回 True；否则返回 False
+        """
+
+        # 判断自变量的元素个数是否符合条件
+        if len(quantities) != len(weights) or len(quantities) != len(max_num):
+            raise ValueError(f"背包问题中，自变量列表元素个数为{len(quantities)}，重量列表的元素个数为{len(weights)}，不一致")
+
+        # 判断每个物品的个数是否在最大值之内
+        for i in range(len(quantities)):
+            if quantities[i] > max_num[i]:
+                return False
+
+        # 判断总重量是否达标
+        total_weight = sum(weight * quantity for weight, quantity in zip(weights, quantities))
+        return total_weight <= max_weight
 
     @staticmethod
     def box_constraint(x: Union[float, List[float]], lower=0, upper=9999) -> bool:
