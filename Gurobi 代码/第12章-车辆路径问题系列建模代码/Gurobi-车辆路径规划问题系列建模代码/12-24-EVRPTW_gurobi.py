@@ -1,0 +1,296 @@
+"""
+booktitle: 《数学建模与数学规划：方法、案例及编程实战 Python+COPT/Gurobi实现》
+name: 带时间窗的电动车辆路径规划问题（EVRPTW）- Gurobi - Python接口代码实现
+author: 张一白
+date: 2022-11-11
+"""
+
+from gurobipy import *
+
+class Data(object):
+    """
+    存储算例数据的类
+    """
+    def __init__(self):
+        self.node_num = 0              # 点的数量
+        self.demand = []               # 客户点的需求
+        self.dis_matrix = []           # 点的距离矩阵
+        self.service_time = []         # 客户的服务时间
+        self.early_time_window = []    # 客户的最早硬服务时间
+        self.late_time_window = []     # 客户的最晚硬服务时间
+        self.charge_node = 15          # 令第16个点为充电站点
+        self.g = 0.2                   # 设置充电速率，假定充满电需要20分钟时间
+
+    def read_and_print_data(self, path, data):
+        """
+        读取算例数据中前customer_num个顾客的数据。
+
+        :param path: 文件路径
+        :param customer_num: 顾客数量
+        :return:
+        """
+
+        # 读取EVRPTW的算例，有15个客户点
+        f = open(path, 'r')
+        sth = f.readlines()
+
+        ori_data = []
+        for i in sth:
+            item = i.strip("\n").split()
+            ori_data.append(item)
+        data.node_num = len(ori_data)
+        for i in range(data.node_num):
+            for j in range(len(ori_data[i])):
+                print(ori_data[i][j], end="\t\t")
+                ori_data[i][j] = int(ori_data[i][j])
+            print()
+        print("------------------------------------------")
+
+        # 计算距离矩阵，保留两位小数，并打印矩阵
+        data.dis_matrix = [
+            [round(math.sqrt(sum((ori_data[i][k] - ori_data[j][k]) ** 2 for k in range(1, 3))), 2) for i in
+             range(data.node_num)]
+            for j in range(data.node_num)]
+        for i in range(len(data.dis_matrix)):
+            for j in range(len(data.dis_matrix[i])):
+                if i != j:
+                    print(data.dis_matrix[i][j], end="\t\t")
+            print()
+
+        # 读取算例中的需求列和服务时间列
+        data.demand = [ori_data[i][3] for i in range(data.node_num)]
+        data.service_time = [ori_data[i][6] for i in range(data.node_num)]
+
+        # 存取算例中的时间窗
+        data.early_time_window = [ori_data[i][4] for i in range(data.node_num)]
+        data.late_time_window = [ori_data[i][5] for i in range(data.node_num)]
+
+class Model_builder(object):
+    """
+    构建模型的类。
+    """
+    def __init__(self):
+        self.model = None
+        self.big_M = 10000
+        self.x = {}
+        self.y = {}
+        self.q = {}
+        self.t = {}
+
+    def build_and_solve_model(self, data=None):
+        """
+        构建模型的类。
+
+        :param data: 算例数据
+        :return:
+        """
+
+        # 开始在Gurobi中建模
+        try:
+            self.model = Model("EVRPTW")
+
+            # 创建变量
+            self.x = {}
+            self.y = {}
+            self.q = {}
+            self.t = {}
+
+            # 因为复制了配送中心点为{o，d}，并复制了S-1份充电任务，所以点的总个数是N+S，即2N-2个点。
+            N = 2 * data.node_num - 2
+
+            for i in range(N):
+                # 创建车辆到达点i剩余容量变量q_i,是连续类型变量，算例设置的车辆容量最大为200，因只使用了其中15个点，将容量限制为50。
+                self.q[i] = self.model.addVar(lb=0.0, ub=50, obj=0.0, vtype=GRB.CONTINUOUS, name="q_%d" % i)
+                # 创建车辆到达点i已消耗的电量,电量为0-100
+                self.y[i] = self.model.addVar(lb=0.0, ub=100, obj=0.0, vtype=GRB.CONTINUOUS, name="y_%d" % i)
+                # 创建车辆到达点i的时间变量
+                if i in range(0, data.charge_node):
+                    self.t[i] = self.model.addVar(lb=data.early_time_window[i], ub=data.late_time_window[i], obj=0.0, vtype=GRB.CONTINUOUS, name="t_%d" % i)
+                elif i in range(data.charge_node, N - 1):
+                    self.t[i] = self.model.addVar(lb=data.early_time_window[data.charge_node], ub=data.late_time_window[data.charge_node], obj=0.0, vtype=GRB.CONTINUOUS, name="t_%d" % i)
+                else:
+                    self.t[i] = self.model.addVar(lb=data.early_time_window[0], ub=data.late_time_window[0], obj=0.0, vtype=GRB.CONTINUOUS, name="t_%d" % i)
+
+                for j in range(1, N):
+                    # 默认不存在点i到点i的弧，也不存在点{o}到点{d}的弧。
+                    if i != j:
+                        # 以{o}开始的弧
+                        if i == 0:
+                            # 以客户点为终点
+                            if j < data.charge_node:
+                                self.x[i, j] = self.model.addVar(obj=data.dis_matrix[0][j], vtype=GRB.BINARY, name="x_%d_%d" % (i, j))
+                            # 以充电站为终点
+                            elif j < N - 1:
+                                self.x[i, j] = self.model.addVar(obj=data.dis_matrix[0][data.charge_node], vtype=GRB.BINARY, name="x_%d_%d" % (i, j))
+                        # 以客户点开始的弧
+                        elif i in range(1, data.charge_node):
+                            # 以客户点为终点
+                            if j < data.charge_node:
+                                self.x[i, j] = self.model.addVar(obj=data.dis_matrix[i][j], vtype=GRB.BINARY, name="x_%d_%d" % (i, j))
+                            # 以充电站为终点
+                            elif j in range(data.charge_node, N - 1):
+                                self.x[i, j] = self.model.addVar(obj=data.dis_matrix[i][data.charge_node], vtype=GRB.BINARY, name="x_%d_%d" % (i, j))
+                            # 以场站为终点
+                            elif j == N - 1:
+                                self.x[i, j] = self.model.addVar(obj=data.dis_matrix[i][0], vtype=GRB.BINARY, name="x_%d_%d" % (i, j))
+                        # 以充电站开始的弧
+                        elif i in range(data.charge_node, N - 1):
+                            # 以客户点为终点
+                            if j in range(1, data.charge_node):
+                                self.x[i, j] = self.model.addVar(obj=data.dis_matrix[data.charge_node][j], vtype=GRB.BINARY, name="x_%d_%d" % (i, j))
+                            # 以场站为终点
+                            elif j == N - 1:
+                                self.x[i, j] = self.model.addVar(obj=data.dis_matrix[data.charge_node][0], vtype=GRB.BINARY, name="x_%d_%d" % (i, j))
+
+            # 设置目标函数(如果最大化改成-1就可以了)
+            self.model.modelsense = 1
+
+            # 每个客户都必须被有且只有一辆车服务，使用可能离开点i的路径刻画
+            for i in range(1, data.charge_node):
+                expr = LinExpr()
+                for j in range(1, N):
+                    if i != j:
+                        expr.addTerms(1, self.x[i, j])
+                self.model.addConstr(expr == 1, name="Customer_%d" % (i))
+
+            # 配送中心或车场发出的车辆要等于回来的车辆
+            self.model.addConstr(sum(self.x[0, j] for j in range(1, N - 1)) - sum(self.x[i, N - 1] for i in range(1, N - 1)) == 0,
+                        "DepotFlowConstr")
+
+            # 流平衡约束
+            for j in range(1, N - 1):
+                lh = LinExpr()
+                rh = LinExpr()
+                # 流量平衡点是客户点
+                if j < data.charge_node:
+                    for i in range(N):
+                        if i != j:
+                            if i != N - 1:
+                                lh.addTerms(1, self.x[i, j])
+                            if i != 0:
+                                rh.addTerms(1, self.x[j, i])
+                    self.model.addConstr(lh - rh == 0, "PointFlowConstr_%d" % j)
+                # 流量平衡点是充电站
+                else:
+                    for i in range(1, data.charge_node):
+                        lh.addTerms(1, self.x[i, j])
+                        rh.addTerms(1, self.x[j, i])
+                    self.model.addConstr(lh + self.x[0, j] == rh + self.x[j, N - 1], "PointFlowConstr_%d" % j)
+
+            # MTZ约束控制容量变化，并避免环路
+            for i in range(0, N - 1):
+                for j in range(1, N):
+                    if i != j:
+                        # 如果是客户点开始的弧：
+                        if i in range(1, data.charge_node):
+                            self.model.addConstr(self.q[i] + data.demand[i] - self.q[j] <= (1 - self.x[i, j]) * self.big_M, "Capacity_%d_%d" % (i, j))
+                        # 如果是充电站开始的弧：
+                        elif i >= data.charge_node and j in range(1, data.charge_node):
+                            self.model.addConstr(self.q[i] + data.demand[data.charge_node] - self.q[j] <= (1 - self.x[i, j]) * self.big_M, "Capacity_%d_%d" % (i, j))
+                        # 容量约束只包含上述两类有效约束
+
+            # 同理构建时间变化约束
+            for i in range(0, N - 1):
+                for j in range(1, N):
+                    if i != j:
+                        # 如果是车场开始的弧：
+                        if i == 0:
+                            if j < data.charge_node:
+                                self.model.addConstr(data.dis_matrix[i][j] - self.t[j] <= (1 - self.x[i, j]) * self.big_M, "Time_%d_%d" % (i, j))
+                            elif j in range(data.charge_node, N - 1):
+                                self.model.addConstr(data.dis_matrix[i][data.charge_node] - self.t[j] <= (1 - self.x[i, j]) * self.big_M, "Time_%d_%d" % (i, j))
+                        # 如果是客户点开始的弧：
+                        elif i in range(1, data.charge_node):
+                            if j in range(1, data.charge_node):
+                                self.model.addConstr(self.t[i] + data.service_time[i] + data.dis_matrix[i][j] - self.t[j] <= (1 - self.x[i, j]) * self.big_M,
+                                            "Time_%d_%d" % (i, j))
+                            elif j in range(data.charge_node, N - 1):
+                                self.model.addConstr(self.t[i] + data.service_time[i] + data.dis_matrix[i][data.charge_node] - self.t[j] <= (1 - self.x[i, j]) * self.big_M,
+                                            "Time_%d_%d" % (i, j))
+                            else:
+                                self.model.addConstr(self.t[i] + data.service_time[i] + data.dis_matrix[i][0] - self.t[j] <= (1 - self.x[i, j]) * self.big_M,
+                                            "Time_%d_%d" % (i, j))
+                        # 如果是充电站开始的弧：
+                        elif i in range(data.charge_node, N - 1):
+                            if j in range(1, data.charge_node):
+                                self.model.addConstr(self.t[i] + self.y[i] * data.g + data.dis_matrix[data.charge_node][j] - self.t[j] <= (1 - self.x[i, j]) * self.big_M,
+                                            "Time_%d_%d" % (i, j))
+                            elif j == N - 1:
+                                self.model.addConstr(self.t[i] + self.y[i] * data.g + data.dis_matrix[data.charge_node][0] - self.t[j] <= (1 - self.x[i, j]) * self.big_M,
+                                            "Time_%d_%d" % (i, j))
+
+            # 同理构建电量变化约束：
+            for i in range(0, N - 1):
+                for j in range(1, N):
+                    if i != j:
+                        # 如果是场站开始的弧：
+                        if i == 0:
+                            if j in range(1, data.charge_node):
+                                self.model.addConstr(data.dis_matrix[i][j] - self.y[j] <= (1 - self.x[i, j]) * self.big_M, "Ele_%d_%d" % (i, j))
+                            elif j in range(data.charge_node, N - 1):
+                                self.model.addConstr(data.dis_matrix[i][data.charge_node] - self.y[j] <= (1 - self.x[i, j]) * self.big_M, "Ele_%d_%d" % (i, j))
+                        # 如果是客户点开始的弧：
+                        elif i in range(1, data.charge_node):
+                            if j in range(1, data.charge_node):
+                                self.model.addConstr(self.y[i] + data.dis_matrix[i][j] - self.y[j] <= (1 - self.x[i, j]) * self.big_M, "Ele_%d_%d" % (i, j))
+                            elif j in range(data.charge_node, N - 1):
+                                self.model.addConstr(self.y[i] + data.dis_matrix[i][data.charge_node] - self.y[j] <= (1 - self.x[i, j]) * self.big_M, "Ele_%d_%d" % (i, j))
+                            else:
+                                self.model.addConstr(self.y[i] + data.dis_matrix[i][0] - self.y[j] <= (1 - self.x[i, j]) * self.big_M, "Ele_%d_%d" % (i, j))
+                        # 如果是充电站开始的弧：
+                        elif i in range(data.charge_node, N - 1):
+                            if j in range(1, data.charge_node):
+                                self.model.addConstr(data.dis_matrix[data.charge_node][j] - self.y[j] <= (1 - self.x[i, j]) * self.big_M, "Ele_%d_%d" % (i, j))
+                            elif j == N - 1:
+                                self.model.addConstr(data.dis_matrix[data.charge_node][0] - self.y[j] <= (1 - self.x[i, j]) * self.big_M, "Ele_%d_%d" % (i, j))
+
+            log_file_name = 'EVRPTW.log'
+            self.model.setParam(GRB.Param.LogFile, log_file_name)       # 设置输出路径
+            self.model.setParam(GRB.Param.MIPGap, 0)          # 设置 MIPGap 容差为 0
+            self.model.optimize()                                     # 命令求解器进行求解
+
+            # 打印最优路径
+            print("==========================================")
+            print(f"ObjVal: {self.model.ObjVal}")
+            print("最优路径：")
+            Count = 1
+            for i in range(1, N - 1):
+                flag = True
+                if self.x[0, i].x >= 0.9:
+                    if i in range(1, data.charge_node):
+                        print("第%d条路径为：" % Count, end="\n")
+                        print("场站-客户%d-" % i, end="")
+                    else:
+                        print("第%d条路径为：" % Count, end="\n")
+                        print("场站-充电任务%d-" % i, end="")
+                    current_node = i
+                    while flag:
+                        for j in range(1, N):
+                            if current_node != j and self.x[current_node, j].x >= 0.9:
+                                if j in range(1, data.charge_node):
+                                    print("客户%d-" % j, end="")
+                                    current_node = j
+                                elif j in range(data.charge_node, N - 1):
+                                    print("充电任务%d-" % j, end="")
+                                    current_node = j
+                                else:
+                                    print("场站", end="\n")
+                                    flag = False
+                                break
+                    Count += 1
+
+            # 导出EVRPTW的模型
+            self.model.write("EVRPTW.mps")
+        except GurobiError as e:
+            print("Error code " + str(e.errno) + ": " + str(e))
+
+if __name__ == "__main__":
+
+    # 调用函数读取数据
+    data = Data()
+    path = 'r102C15.txt'
+    data.read_and_print_data(path, data)
+
+    # 建立模型并求解
+    model_handler = Model_builder()
+    model_handler.build_and_solve_model(data=data)
